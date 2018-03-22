@@ -1,0 +1,268 @@
+---
+title: "Calorie Consumption During Bicycle Work: A Statistical Analysis of an Incomplete Dataset"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author: Nuno Chicoria (r0698632), Boris Shilov (r0686052), Murat Cem Kose (r0689792), Yibing Liu (r0684580), Robin Vermote (r0482826)
+output: 
+  bookdown::pdf_document2:
+    number_sections: true
+bibliography: ./bibliography.bib
+---
+
+# Introduction
+
+This project aimed to examine data originally gathered by @macdonald1914mechanical and conveyed to us by @greenwood1918efficiency, consisting of observations on seven people performing work using a bicycle ergometer, although our current dataset appears to include extra values and data not found in @greenwood1918efficiency, though these values may indeed be present in @macdonald1914mechanical, access to which could not be obtained in a timely manner. In the body of this work it shall be assumed that every row in our dataset represents a separate individual, giving a total of 24 separate individuals across 24 rows. The dataset includes three separate measurements - weight of the individuals, calories per hour spent by individuals which serves as a measure of workout intensity, and calories spent during the task.
+```{r include=FALSE, cache=FALSE}
+requirements = c("nlme", "effects", "pastecs", "lattice", 
+                 "psych", "ggplot2", "GGally", "mice", "VIM", "aod", "BaM", "lme4", "ipw", "gridExtra", "cowplot")
+lapply(requirements, require, character.only = T)
+```
+
+```{r echo=FALSE}
+options(digits=4)
+muscledata = read.table("muscle-incomplete.txt", header=T, na.strings = "NA")
+muscledata
+```
+
+# Methods and Results
+
+## Data exploration
+
+A set of summary statistics for the dataset is presented below. It can be immediately seen that the response calories variable is missing in eight cases and is the only incomplete variable in the dataset. The mean and median values for all variables in the dataset are very similar to each other which indicates a symmetric distribution. A matrix of summary plots for the dataset is presented in Figure \@ref(fig:PairsPlot). We can clearly see what appears to be an extremely strong positive correlation between calories and workout intensity ($0.95$), and a very small positive correlation between calories and weight($0.11$). The scatterplot further indicates that the correlation between calories and workout intensity is very likely to be linear.
+
+The distributions of the values are plotted as boxplots in Fig. \@ref(fig:muscledataboxplots). Note that the response variable is plotted with missing values excluded in all of these figures, thus despite expecting an approximately similar distribution between workout intensity and calories variables, the calories distribution is shifted upwards due to the missing values.
+
+```{r echo = FALSE}
+muscledata_edit = na.omit(muscledata)
+attach(muscledata)
+stat.desc(muscledata[,c("weight","calhour","calories")],basic = TRUE, desc = TRUE)
+```
+
+
+```{r figBoxPlots, echo = FALSE, fig.cap="\\label{fig:muscledataboxplots}Boxplots for the dependent variables weight, calhour and independent variable calories."}
+par(mfrow=c(1,3))
+boxplot(weight, main='weight', col="pink")
+boxplot(calhour, main='calhour', col="magenta")
+boxplot(calories, main='calories', col="purple")
+par(mfrow=c(1,1))
+```
+
+```{r figPairsPlot, echo = FALSE, fig.cap="\\label{fig:PairsPlot}A summary statistics plot of the dataset using the ggplot command."}
+ggpairs(muscledata_edit)
+```
+
+We check the signifance of the two positive correlations we have found using Pearson's correlation (using Central Limit Theorem as the dataset contains around 20 rows). Here $H_0:correlation=0$; $H1:correlation \neq 0;$ $95\%CI$.
+
+```{r echo = FALSE}
+cor.test(muscledata_edit$calhour, muscledata_edit$calories, alternative = "two.sided", method = "pearson")
+```
+
+```{r echo = FALSE}
+cor.test(muscledata_edit$weight, muscledata_edit$calories, alternative = "two.sided", method = "pearson")
+```
+
+Clearly we reject the null hypothesis with regards to workout intensity and calories and accept it with regards to weight and calories. This indicates that there is a non-spurious correlation between workout intensity and calories in the population.
+
+## Missing data exploration
+
+```{r figMissDatBox, echo = FALSE, fig.cap="\\label{fig:MissDatBox}Patterns of missing data across variables."}
+aggr(muscledata, numbers = TRUE, prop = FALSE, ylab = c("Histogram of missing data", "Pattern"), col= c("pink", "purple"))
+```
+
+A histogram of missing data is shown in Fig. \@ref(fig:MissDatBox). We confirm our previous observation that all the missing values are located in our response variable.
+
+Fig. \@ref(fig:MissingHists)A and C we see that the missing data approximately evenly distributed among the different weight variables. In Fig. \@ref(fig:MissingHists)B and D we see that the missing data distribution is extremely biased towards the lower end of the range with regards to workout intensity. This may be because of the difficulty in measuring heat production at lower exercise intensity - in other words, the missingness is likely systematic due to technical noise. Importantly, the missingness appears to depend only on an observed variable in this study - the calories. Thus, this suggests "Missing-at-Random" as the most probable missing data mechanism, allowing us to proceed with applying missing data strategies - particularly MI and IPW. We will nonetheless evaluate some of the more common methods as well.
+
+```{r figMissingHists, echo = FALSE, fig.width = 10, fig.height=10, fig.cap="\\label{fig:MissingHists}Histograms of the observed and missing data as well as marginplots depicting histograms and correlations."}
+layout(matrix(c(1, 3, 4, 2), nrow=2, byrow=TRUE))
+
+hist1 = histMiss(muscledata, col= c("pink", "purple"))
+title(main="A")
+legend(40,8, legend=c("Observed Data", "Missing Data"),
+       col=c("pink", "purple"), pch=19, cex=0.8)
+
+hist2 = marginplot(muscledata[c("calhour","calories")], col= c("pink", "purple"))
+title(main="D")
+legend(12, 345, legend=c("Observed Data", "Missing Data"),
+       col=c("pink", "purple"), pch=19, cex=0.8)
+
+hist3 = histMiss(muscledata, pos=2, col= c("pink", "purple"))
+title(main="B")
+legend(52,8, legend=c("Observed Data", "Missing Data"),
+       col=c("pink", "purple"), pch=19, cex=0.8)
+
+hist4 = marginplot(muscledata[c("weight","calories")], col= c("pink", "purple"))
+title(main="C")
+legend(45, 345, legend=c("Observed Data", "Missing Data"),
+       col=c("pink", "purple"), pch=19, cex=0.8)
+
+```
+
+## Complete case analysis
+
+Complete case analysis relies on removing rows of our dataset that have missing values - giving us a restricted sample of 16 rows to work with. 
+
+We select the best linear model to use for complete case analysis using stepwise Akaike's Information Criterion - a measure of the quality of our statistical models relative to each other, which indicates the amount of information lost by excluding or including model terms.
+
+```{r echo = FALSE}
+muscledata.stepwise = step(lm(calories ~1, data=muscledata_edit), scope=~weight+calhour+weight*calhour, direction="both")
+```
+
+Lower AIC is better, thus we conclude that a model incorporating weight, calhour and an interaction term is the most explanatory linear model available given our exploratory analysis. In mathematical terms:
+$$
+calories_i = \beta_0 + \beta_1*weight_i + \beta_2*calhour_i + \beta_3*(weight_i*calhour_i) + \epsilon_i
+$$
+
+The summary for this model:
+
+```{r echo = FALSE}
+muscledata.complete.case = lm(calories~weight+calhour+weight*calhour, data=muscledata_edit)
+summary(muscledata.complete.case)
+```
+
+All four terms appear highly significant in this model. However, the intercept term $\beta_0$ does not have a physical meaning in this model. The significance of the interaction term means that the weight has an influence on the effect of workout intensity on calories.
+
+An effects plot is presented in Fig. \@ref(fig:AllEffGoodModel). This plot indicates that there is a decrease in slope, determined by workout intensity and calories, as workout intensity is increasing.
+
+```{r figAllEffGoodModel, echo = FALSE, fig.cap="\\label{fig:AllEffGoodModel}The All Effects plot for the Complete Case linear model."}
+plot(allEffects(muscledata.complete.case),main="Complete Case Effects Plot")
+```
+
+## Multiple imputation analysis
+
+Multiple imputation is an approach to deal with incomplete data that can be applied to univariate or multivariate data. The technique replaces missing values with two or more imputed values. Unlike simpler single imputation methods where only a single value is imputed, such as mean imputation, multiple imputation as the name suggests replaces each missing value with multiple imputed values, in effect generating a number of datasets. Practically, this allows us to represent a variety of theoretical mechanisms for why the nonresponse occured. These differing datasets are known as multiply imputed datasets. These datasets are used to generate a matrix of regression coefficients, in essence building a regression model. We generate as many regression coefficient matrices as there are multiply imputed datasets. We then pool the regression coefficients into a single estimate which can be used to estimate variance [@rubin2004multiple]. There are several methods of imputation available.
+
+First we use the predictive mean matching (PMM) method. This is one of the "default" methods and it faithfully reproduces the relations present in the original data even if they happen to be nonlinear. The results of such a simulation with 100 imputed value datasets:
+```{r echo = FALSE, include=FALSE, cache=FALSE}
+muscledata.imp.pmm = mice(muscledata, meth = c("", "", "pmm"), m=100) # imputation of different values, 100 different complete datasets
+muscledata.fit.pmm = with(data=muscledata.imp.pmm, exp=glm(calories~weight+calhour+weight*calhour))  # analysis, creating a Q for each imputed dataset
+muscledata.pmm = pool(muscledata.fit.pmm)  # pooling the Qs together to create one estimate Q mean. if Q are approx normally distributed, we calculate mean over all Q and sum the within and between imputation variance using Rubins method
+summary(muscledata.pmm)
+```
+
+According to the resulting PMM model, none of the possible dependent variables have any statistically significant influence on our response variable. The effects plot in Fig \@ref(fig:AllEffGoodModel) shows that there is no influence of the interaction term on the response variable since the slope does not change. Notice also the contraction of the $95\%$ confidence limit due to the imputation process.
+
+The strip plot is shown in Fig. \@ref(fig:StripCompPMM) showing original data in pink and generated data in purple. We thus indeed confirm PMM-generated data follows very similar relations to the original dataset.
+
+
+```{r figAllEffCompPMM, echo = FALSE, fig.cap="\\label{fig:AllEffGoodModel}The All Effects plot for MI using the PMM method."}
+MI.fitted.values.pmm = complete(muscledata.imp.pmm, "long", inc=T)
+muscledata.results.mi.pmm = glm(calories~weight+calhour+weight*calhour, data=MI.fitted.values.pmm)
+dlist=list(calhour=seq(20,60,10))
+plot(allEffects(muscledata.results.mi.pmm,xlevels=dlist)[1], main="PMM Effects Plot")
+```
+
+```{r figStripCompPMM, echo = FALSE, fig.cap="\\label{fig:StripCompPMM}The strip plot of PMM data."}
+col <- rep(c("pink","purple")[1+as.numeric(is.na(muscledata.imp.pmm$data$calories))],101)
+stripplot(calories~.imp, data=MI.fitted.values.pmm, jit=TRUE, fac=0.8, col=col, pch=20, cex=1.4, xlab="Imputation number", main="Original data vs. generated data (PMM)", scales=list(x=list(draw=FALSE)))
+```
+
+An alternative to PMM with our dataset is Bayesian linear regression, which can create univariate missing data. This reformulates our linear model in probabilistic terms. In this method we assume a prior distribution for the parameters of the regression [@rubin2004multiple]. In our method the prior distribution is assumed to be normal (the normal model). The result is:
+
+```{r echo = FALSE, include=FALSE, cache=FALSE}
+muscledata.imp.norm = mice(muscledata, meth = c("", "", "norm"), m=100) # imputation of different values, 100 different complete datasets
+muscledata.fit.norm = with(data=muscledata.imp.norm, exp=glm(calories~weight+calhour+weight*calhour))  # analysis, creating a Q for each imputed dataset
+muscledata.norm = pool(muscledata.fit.norm)  # pooling the Qs together to create one estimate Q mean. if Q are approx normally distributed, we calculate mean over all Q and sum the within and between imputation variance using Rubins method
+```
+
+```{r echo = FALSE}
+summary(muscledata.norm)
+```
+
+According to our Bayesian model, the workout intensity is the only variable that has a statistically significant influence on our response variable. The effects plot in Fig. \@ref(fig:AllEffCompNORM) demonstrates a similar finding to the PMM effects plot in that due to preserving the slope remaining the same the interaction variable clearly does not have much effect. The strip plot in Fig. \@ref(fig:StripCompNORM) highlights the probabilistic nature of the Bayesian imputation algorithm, the imputed data points being sampled from the obtained posterior distribution of our parameters.
+
+```{r figAllEffCompNORM, echo = FALSE, fig.cap="\\label{fig:AllEffCompNORM}The All Effects plot for MI using the Bayesian NORM method."}
+MI.fitted.values.norm = complete(muscledata.imp.norm, "long", inc=T)
+muscledata.results.mi.norm = glm(calories~weight+calhour+weight*calhour, data=MI.fitted.values.norm)
+dlist=list(calhour=seq(20,60,10))
+plot(allEffects(muscledata.results.mi.norm,xlevels=dlist)[1], main="NORM effects plot")
+```
+
+```{r figStripCompNORM, echo = FALSE, fig.cap="\\label{fig:StripCompNORM}The strip plot of Bayesian NORM data."}
+col <- rep(c("pink","purple")[1+as.numeric(is.na(muscledata.imp.norm$data$calories))],101)
+stripplot(calories~.imp, data=MI.fitted.values.norm, jit=TRUE, fac=0.8, col=col, pch=20, cex=1.4, xlab="Imputation number", main="Original data vs. generated data (NORM)", scales=list(x=list(draw=FALSE)))
+```
+
+
+## Inverse Probability Weighting analysis
+
+The Inverse Probability Weighting method attemps to mitigate the bias introduced by complete case studies if the excluded population appears to be systematically different from the complete cases. The complete cases are weighted using the inverse probability of their being a complete case. As you may recall, this is intuitively a very plausible model for our data since a mechanistic hypothesis for the MAR present is due to technical noise. To emphasize, in IPW the analytical model is only fitted to complete cases [@seaman2013review]. The results are thus:
+```{r echo = FALSE}
+IPWanal_muscledata = muscledata
+IPWanal_muscledata$r = as.numeric(!is.na(IPWanal_muscledata$calories))
+muscledata.ipw.glm = lm(r ~ calhour, data=IPWanal_muscledata, family=binomial)
+IPWanal_muscledata$w = 1/fitted(muscledata.ipw.glm)
+muscledata.results.ipw= lm(calories~weight+calhour+weight*calhour, data=IPWanal_muscledata, weights=muscledata$w)
+summary(muscledata.results.ipw)
+```
+
+All the parameters are highly significant, similarly to the complete cases analysis as can be expected. Fig. \@ref(fig:AllEffIPW) effects plot is also highly similar.
+
+```{r figAllEffIPW, echo = FALSE, fig.cap="\\label{fig:AllEffIPW}The All Effects plot for our IPW-modelled data."}
+plot(allEffects(muscledata.results.ipw), main="IPW effects plot")
+```
+
+The relative AIC values of the complete case and IPW models can be used for comparison to validate that our IPW model is indeed better than simple CC:
+
+```{r echo = FALSE}
+AIC(muscledata.complete.case)
+```
+```{r echo = FALSE}
+AIC(muscledata.results.ipw)
+```
+ 
+We can observed that IPW yields only a miniscule improvement over CC in this case.
+
+# Discussion
+
+![The coefficients for the different chosen models.](./coefficient.png)
+
+Due to the NA values, we conducted a full model analysis with a complete case and two different methods for NA values replacement (MI and IPW). Because the NA values are not evenly distributed among workout intensity, we decided to try different approaches for NA handling.
+
+```{r figDiscCompare, echo = FALSE, fig.width=10, fig.height=10, fig.cap="\\label{fig:DiscCompare}Condensed All Effects plots from the various analysis types side by side."}
+CCplot = plot(allEffects(muscledata.complete.case)[[1]], multiline=TRUE, ci.style = "bands",main = "CC")
+NORMplot = plot(allEffects(muscledata.results.mi.norm,xlevels=dlist)[[1]], multiline=TRUE, ci.style = "bands",main = "Norm")
+PMMplot = plot(allEffects(muscledata.results.mi.pmm, xlevels=dlist)[[1]], multiline=TRUE, ci.style = "bands",main = "PMM")
+IPWplot = plot(allEffects(muscledata.results.ipw)[[1]], multiline=TRUE, ci.style = "bands",main = "IPW")
+class(CCplot) = class(NORMplot) = class(PMMplot) = class(IPWplot) = "trellis"
+grid.arrange(CCplot, NORMplot, PMMplot, IPWplot, ncol=2, nrow=2)
+```
+
+```{r echo = FALSE, include=FALSE, cache=FALSE}
+complete=ggplot(muscledata_edit, aes(x=weight*calhour, y=calories ))+ geom_point(colour="magenta") + geom_smooth(colour="purple", method="lm") +xlab("Interaction")
+norm=ggplot(MI.fitted.values.norm, aes(x=weight*calhour, y=calories))+ geom_point(colour="magenta") + geom_smooth(colour="purple", method="lm") +xlab("Interaction")
+pmm=ggplot(MI.fitted.values.pmm, aes(x=weight*calhour, y=calories))+ geom_point(colour="magenta") + geom_smooth(colour="purple", method="lm") +xlab("Interaction")
+```
+
+
+```{r figDiscInteraction, echo = FALSE, fig.width=10, fig.height=10, fig.cap="\\label{fig:DiscInteraction}Interaction scatterplots for the normal NA-excluded dataset, values fitted using NORM and values fitted using PMM."}
+suppressWarnings(plot_grid(complete, pmm, norm , 
+          labels = c("CC/IPW", "PMM", "NORM"),
+          ncol = 2, nrow = 2))
+```
+
+At Fig. \@ref(fig:DiscCompare) we are comparing the 4 effect plots previously shown. In our MI models, there are no significant changes in the slope which means that the interaction factor plays no role over the weight and calories as we change the workout intensity values. This supports the p-value we observed while building the model that showed us no significance for the interaction term. Nevertheless, to be able to compare all our models, and since the MI models with less parameters showed no overall improvement, we decided to use the same parameters to generate all models. For both the Complete Case and IPW model we can observe a change in the slope for higher values of workout intensity. This leads us to conclude that the interaction term is significant for this models as shown by their respective p-values.
+
+
+In the following three plots in Fig. \@ref(fig:DiscInteraction) we can see that the behaviour of the interaction factor vs. calories is somewhat simillar for the CC model and the two models created under MI. These three graphs are relevant to see how the two different methods chose in MI generate the new values. We can see in the graph for the PMM method that the line deviates more from the original data than in the Bayesian NORM graph. So, the PMM method of generating new values actually appears to be bringing our model away from the original data.
+
+
+Finally, IPW assigns weights to each available observation. In our case, all calories values corresponding to workout intensity 13 are missing. Hence, the method cannot assign a weight to values that do not exist. So, the only difference between the CC and IPW model is based on value generated for the workout intensity 19 (the only other entry with a missing value). This supports all our previous graphs coefficient values for both models that are always simmilar.
+
+# Conclusion
+
+Based on our discussion, and since the IPW model presented a lower AIC value than the CC model, we chose as a final model the IPW one.
+
+$$
+calories_i = -351.223 + 8.0343*weight_i + 12.205*calhour_i - 0.1382*(weight_i*calhour_i) + \epsilon_i
+$$
+
+Analysing the model we conclude that both weight and workout intensity have a positive impact in the heat production for the individual. On the other hand, the interaction term has a slight negative impact in the heat production that is shown in previous graphs when we start to arrive at a plateau for higher values of workout intensity for variable weights. Also of importance is the intercept value $-351.223$ that has no physical significance as heat production is a strictly positive value.
+
+```{r echo=FALSE,fig.align='center'}
+confint(muscledata.results.ipw)
+```
+
+Looking at the confidence intervals, we affirm with a 95% confidence that our values will fall inside the presented intervals. Hence, weight and workout intensity will be positive and the interaction factor negative. This is a good parameter to estimate how the population falls under our model.
+
+# References
+
