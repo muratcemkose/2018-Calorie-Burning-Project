@@ -214,8 +214,6 @@ We can observed that IPW yields only a miniscule improvement over CC in this cas
 
 # Discussion
 
-![The coefficients for the different chosen models.](./coefficient.png)
-
 Due to the NA values, we conducted a full model analysis with a complete case and two different methods for NA values replacement (MI and IPW). Because the NA values are not evenly distributed among workout intensity, we decided to try different approaches for NA handling.
 
 ```{r figDiscCompare, echo = FALSE, fig.width=10, fig.height=10, fig.cap="\\label{fig:DiscCompare}Condensed All Effects plots from the various analysis types side by side."}
@@ -252,8 +250,16 @@ Finally, IPW assigns weights to each available observation. In our case, all cal
 
 Based on our discussion, and since the IPW model presented a lower AIC value than the CC model, we chose as a final model the IPW one.
 
+```{r echo=FALSE,fig.align='center'}
+intercept=summary(muscledata.results.ipw)$coefficients[1,1]
+wei=summary(muscledata.results.ipw)$coefficients[2,1]
+calh=summary(muscledata.results.ipw)$coefficients[3,1]
+interact=summary(muscledata.results.ipw)$coefficients[4,1]
+
+```
+
 $$
-calories_i = -351.223 + 8.0343*weight_i + 12.205*calhour_i - 0.1382*(weight_i*calhour_i) + \epsilon_i
+calories_i = $`r intercept`$  + $`r wei`$*weight_i + $`r calh`$*calhour_i - $`r interact`$*(weight_i*calhour_i) + \epsilon_i
 $$
 
 Analysing the model we conclude that both weight and workout intensity have a positive impact in the heat production for the individual. On the other hand, the interaction term has a slight negative impact in the heat production that is shown in previous graphs when we start to arrive at a plateau for higher values of workout intensity for variable weights. Also of importance is the intercept value $-351.223$ that has no physical significance as heat production is a strictly positive value.
